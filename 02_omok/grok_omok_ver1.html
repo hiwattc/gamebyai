@@ -1,0 +1,435 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>오목 알까기 게임 (vs 스마트 컴퓨터)</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #deb887; /* Wooden-like color */
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+        #status {
+            margin-top: 10px;
+            font-size: 18px;
+            color: #333;
+        }
+        button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #333;
+            color: white;
+            border: none;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+<body>
+    <h1>오목 알까기 (vs 스마트 컴퓨터)</h1>
+    <canvas id="board" width="760" height="760"></canvas>
+    <div id="status">당신의 차례 (흑)</div>
+    <button onclick="restartGame()">게임 재시작</button>
+
+    <script>
+        const canvas = document.getElementById('board');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+        const size = 19; // 19x19 바둑판
+        const cellSize = 40; // 셀 크기
+        let board = [];
+        let currentPlayer = 'black'; // 플레이어: 흑, 컴퓨터: 백
+        let gameOver = false;
+
+        // 바둑판 초기화
+        function initBoard() {
+            board = Array(size).fill().map(() => Array(size).fill(null));
+            gameOver = false;
+            currentPlayer = 'black';
+            status.textContent = '당신의 차례 (흑)';
+            drawBoard();
+        }
+
+        // 바둑판 그리기
+        function drawBoard() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 배경색은 CSS에서 설정
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+
+            // 격자선 그리기
+            for (let i = 0; i < size; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellSize + cellSize / 2, cellSize / 2);
+                ctx.lineTo(i * cellSize + cellSize / 2, (size - 1) * cellSize + cellSize / 2);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(cellSize / 2, i * cellSize + cellSize / 2);
+                ctx.lineTo((size - 1) * cellSize + cellSize / 2, i * cellSize + cellSize / 2);
+                ctx.stroke();
+            }
+
+            // 별점 (Star Points) 그리기
+            const starPoints = [
+                [3, 3], [3, 9], [3, 15],
+                [9, 3], [9, 9], [9, 15],
+                [15, 3], [15, 9], [15, 15]
+            ];
+            ctx.fillStyle = 'black';
+            starPoints.forEach(([row, col]) => {
+                ctx.beginPath();
+                ctx.arc(col * cellSize + cellSize / 2, row * cellSize + cellSize / 2, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            // 돌 그리기
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (board[i][j] === 'black') {
+                        drawStone(i, j, 'black');
+                    } else if (board[i][j] === 'white') {
+                        drawStone(i, j, 'white');
+                    }
+                }
+            }
+        }
+
+        // 돌 그리기
+        function drawStone(row, col, color) {
+            ctx.beginPath();
+            ctx.arc(col * cellSize + cellSize / 2, row * cellSize + cellSize / 2, cellSize / 2 - 5, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        // 클릭 이벤트 처리 (플레이어)
+        canvas.addEventListener('click', (e) => {
+            if (gameOver || currentPlayer !== 'black') return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const col = Math.round((x - cellSize / 2) / cellSize);
+            const row = Math.round((y - cellSize / 2) / cellSize);
+
+            if (row >= 0 && row < size && col >= 0 && col < size && !board[row][col]) {
+                board[row][col] = 'black';
+                drawBoard();
+
+                if (checkWin(row, col)) {
+                    status.textContent = '게임 종료! 당신 (흑) 승리!';
+                    gameOver = true;
+                    return;
+                }
+
+                currentPlayer = 'white';
+                status.textContent = '컴퓨터가 생각 중... (백)';
+                setTimeout(computerMove, 500);
+            }
+        });
+
+        // 컴퓨터의 수 (Minimax with Alpha-Beta Pruning)
+        function computerMove() {
+            if (gameOver) return;
+
+            let move = findWinningMove('white');
+            if (!move) {
+                move = findWinningMove('black');
+            }
+            if (!move) {
+                move = minimax(2, true, -Infinity, Infinity).move;
+            }
+
+            if (move) {
+                const [row, col] = move;
+                board[row][col] = 'white';
+                drawBoard();
+
+                if (checkWin(row, col)) {
+                    status.textContent = '게임 종료! 컴퓨터 (백) 승리!';
+                    gameOver = true;
+                    return;
+                }
+
+                currentPlayer = 'black';
+                status.textContent = '당신의 차례 (흑)';
+            }
+        }
+
+        // Minimax 알고리즘 with Alpha-Beta Pruning
+        function minimax(depth, isMaximizing, alpha, beta) {
+            if (depth === 0) {
+                return { score: evaluateBoard('white') };
+            }
+
+            let bestMove = null;
+            const moves = getPossibleMoves();
+            if (moves.length === 0) {
+                return { score: evaluateBoard('white') };
+            }
+
+            if (isMaximizing) {
+                let maxScore = -Infinity;
+                for (const [row, col] of moves) {
+                    board[row][col] = 'white';
+                    if (checkWin(row, col)) {
+                        board[row][col] = null;
+                        return { score: 1000000, move: [row, col] };
+                    }
+                    const score = minimax(depth - 1, false, alpha, beta).score;
+                    board[row][col] = null;
+
+                    if (score > maxScore) {
+                        maxScore = score;
+                        bestMove = [row, col];
+                    }
+                    alpha = Math.max(alpha, maxScore);
+                    if (beta <= alpha) break;
+                }
+                return { score: maxScore, move: bestMove };
+            } else {
+                let minScore = Infinity;
+                for (const [row, col] of moves) {
+                    board[row][col] = 'black';
+                    if (checkWin(row, col)) {
+                        board[row][col] = null;
+                        return { score: -1000000, move: [row, col] };
+                    }
+                    const score = minimax(depth - 1, true, alpha, beta).score;
+                    board[row][col] = null;
+
+                    if (score < minScore) {
+                        minScore = score;
+                        bestMove = [row, col];
+                    }
+                    beta = Math.min(beta, minScore);
+                    if (beta <= alpha) break;
+                }
+                return { score: minScore, move: bestMove };
+            }
+        }
+
+        // 보드 평가 함수
+        function evaluateBoard(computerColor) {
+            let score = 0;
+            const directions = [
+                [0, 1], [1, 0], [1, 1], [1, -1]
+            ];
+
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (board[i][j]) {
+                        for (const [dr, dc] of directions) {
+                            score += evaluateLine(i, j, dr, dc, computerColor);
+                        }
+                    }
+                }
+            }
+
+            const center = Math.floor(size / 2);
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (board[i][j] === computerColor) {
+                        const dist = Math.abs(i - center) + Math.abs(j - center);
+                        score += 10 * (size - dist);
+                    } else if (board[i][j] === (computerColor === 'white' ? 'black' : 'white')) {
+                        const dist = Math.abs(i - center) + Math.abs(j - center);
+                        score -= 10 * (size - dist);
+                    }
+                }
+            }
+
+            return score;
+        }
+
+        // 한 방향의 라인 평가
+        function evaluateLine(row, col, dr, dc, computerColor) {
+            let score = 0;
+            const color = board[row][col];
+            const isComputer = color === computerColor;
+            let count = 1;
+            let openEnds = 0;
+
+            let r = row + dr, c = col + dc;
+            while (r >= 0 && r < size && c >= 0 && c < size && board[r][c] === color) {
+                count++;
+                r += dr;
+                c += dc;
+            }
+            if (r >= 0 && r < size && c >= 0 && c < size && !board[r][c]) {
+                openEnds++;
+            }
+
+            r = row - dr;
+            c = col - dc;
+            while (r >= 0 && r < size && c >= 0 && c < size && board[r][c] === color) {
+                count++;
+                r -= dr;
+                c -= dc;
+            }
+            if (r >= 0 && r < size && c >= 0 && c < size && !board[r][c]) {
+                openEnds++;
+            }
+
+            if (count >= 5) {
+                score += isComputer ? 1000000 : -1000000;
+            } else if (count === 4 && openEnds === 2) {
+                score += isComputer ? 10000 : -10000;
+            } else if (count === 4 && openEnds === 1) {
+                score += isComputer ? 1000 : -1000;
+            } else if (count === 3 && openEnds === 2) {
+                score += isComputer ? 500 : -500;
+            } else if (count === 3 && openEnds === 1) {
+                score += isComputer ? 100 : -100;
+            } else if (count === 2 && openEnds === 2) {
+                score += isComputer ? 50 : -50;
+            }
+
+            return score;
+        }
+
+        // 가능한 수 목록
+        function getPossibleMoves() {
+            let moves = [];
+            const seen = new Set();
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (!board[i][j]) {
+                        for (let di = -1; di <= 1; di++) {
+                            for (let dj = -1; dj <= 1; dj++) {
+                                if (di === 0 && dj === 0) continue;
+                                let ni = i + di, nj = j + dj;
+                                if (ni >= 0 && ni < size && nj >= 0 && nj < size && board[ni][nj]) {
+                                    const key = `${i},${j}`;
+                                    if (!seen.has(key)) {
+                                        moves.push([i, j]);
+                                        seen.add(key);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (moves.length === 0) {
+                const center = Math.floor(size / 2);
+                if (!board[center][center]) moves.push([center, center]);
+            }
+            return moves;
+        }
+
+        // 즉시 승리 가능한 수 찾기
+        function findWinningMove(color) {
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (!board[i][j]) {
+                        board[i][j] = color;
+                        let win = checkWin(i, j);
+                        board[i][j] = null;
+                        if (win) return [i, j];
+                    }
+                }
+            }
+            return null;
+        }
+
+        // 승리 조건 확인
+        function checkWin(row, col) {
+            const directions = [
+                [0, 1], [1, 0], [1, 1], [1, -1]
+            ];
+            const color = board[row][col];
+
+            for (const [dr, dc] of directions) {
+                let count = 1;
+                for (let i = 1; i <= 4; i++) {
+                    const r1 = row + dr * i;
+                    const c1 = col + dc * i;
+                    if (r1 >= 0 && r1 < size && c1 >= 0 && c1 < size && board[r1][c1] === color) {
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
+                for (let i = 1; i <= 4; i++) {
+                    const r2 = row - dr * i;
+                    const c2 = col - dc * i;
+                    if (r2 >= 0 && r2 < size && c2 >= 0 && c2 < size && board[r2][c2] === color) {
+                        count++;
+                    } else {
+                        break;
+                    }
+                }
+                if (count >= 5) return true;
+            }
+            return false;
+        }
+
+        // 게임 재시작
+        function restartGame() {
+            initBoard();
+        }
+
+        // 게임 초기화
+        initBoard();
+    </script>
+</body>
+</html>

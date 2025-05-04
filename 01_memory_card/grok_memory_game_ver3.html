@@ -1,0 +1,350 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>이모티콘 매칭 게임</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
+        #gameBoard {
+            display: grid;
+            gap: 10px;
+            margin: 20px;
+            justify-content: center;
+        }
+        .card {
+            width: 80px;
+            height: 80px;
+            background-color: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 32px;
+            cursor: pointer;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: transform 0.3s, border 0.3s;
+            border: 2px solid transparent;
+            perspective: 1000px;
+            position: relative;
+        }
+        .card:hover {
+            transform: scale(1.05);
+        }
+        .card.matched {
+            visibility: hidden;
+        }
+        .card .card-inner {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            transition: transform 0.5s;
+            transform-style: preserve-3d;
+        }
+        .card.flipped .card-inner {
+            transform: rotateY(180deg);
+        }
+        .card-front, .card-back {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 10px;
+        }
+        .card-front {
+            background-color: #e0e0e0;
+            transform: rotateY(180deg);
+        }
+        .card-back {
+            background-color: #ffffff;
+        }
+        .card.selected {
+            border: 2px solid #FFD700;
+        }
+        #message {
+            font-size: 24px;
+            margin-top: 20px;
+            color: #333;
+        }
+        #controls {
+            margin: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        #controls button, #controls select {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #3498DB;
+            color: white;
+        }
+        #controls button:hover, #controls select:hover {
+            background-color: #2980B9;
+        }
+        #stats {
+            font-size: 18px;
+            margin-top: 10px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>이모티콘 매칭 게임</h1>
+    <div id="controls">
+        <button onclick="startMemoryMode()">기억 모드</button>
+        <button onclick="startOpenMode()">오픈 모드</button>
+        <select id="gridSize" onchange="updateGridSize()">
+            <option value="2">2x2</option>
+            <option value="4">4x4</option>
+            <option value="6">6x6</option>
+            <option value="8">8x8</option>
+            <option value="10">10x10</option>
+        </select>
+    </div>
+    <div id="gameBoard"></div>
+    <div id="stats">시도 횟수: 0 | 경과 시간: 0초</div>
+    <div id="message"></div>
+
+    <script>
+        const emojis = [
+            '😺', '🐶', '🐰', '🦁', '🐼', '🦊', '🐻', '🐸', '🐯', '🦒',
+            '🐘', '🦏', '🐊', '🐍', '🦜', '🐙', '🦑', '🐳', '🦈', '🐬',
+            '🦋', '🐞', '🦗', '🐝', '🦂', '🦓', '🦝', '🦦', '🦔', '🦘',
+            '🦙', '🦚', '🦢', '🦩', '🐴', '🐒', '🦍', '🦧', '🐪', '🦬',
+            '🐂', '🐄', '🐖', '🐏', '🐐', '🦌', '🐕', '🐩', '🐈', '🐓',
+            '🦃', '🦤', '🦥', '🦦', '🦨', '🦡', '🐁', '🐀', '🐹', '🐇'
+        ];
+        let cards = [];
+        let flippedCards = [];
+        let matchedPairs = 0;
+        let totalPairs = 2; // 2x2 기본값
+        let currentMode = 'memory';
+        let attemptCount = 0;
+        let startTime = null;
+        let timerInterval = null;
+        let gridSize = 2;
+
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        function generateRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        function generateColors(count) {
+            const colors = [];
+            for (let i = 0; i < count; i++) {
+                colors.push(generateRandomColor());
+            }
+            return colors;
+        }
+
+        function updateStats() {
+            const elapsedTime = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
+            document.getElementById('stats').textContent = `시도 횟수: ${attemptCount} | 경과 시간: ${elapsedTime}초`;
+        }
+
+        function startTimer() {
+            startTime = Date.now();
+            timerInterval = setInterval(updateStats, 1000);
+        }
+
+        function stopTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+        }
+
+        function updateGridSize() {
+            gridSize = parseInt(document.getElementById('gridSize').value);
+            totalPairs = Math.floor((gridSize * gridSize) / 2);
+            createBoard();
+        }
+
+        function createBoard() {
+            const gameBoard = document.getElementById('gameBoard');
+            gameBoard.innerHTML = '';
+            gameBoard.style.gridTemplateColumns = `repeat(${gridSize}, 80px)`;
+            gameBoard.style.gridTemplateRows = `repeat(${gridSize}, 80px)`;
+            cards = [];
+            flippedCards = [];
+            matchedPairs = 0;
+            attemptCount = 0;
+            startTime = null;
+            stopTimer();
+            document.getElementById('message').textContent = '';
+            updateStats();
+
+            const neededEmojis = totalPairs;
+            if (neededEmojis > emojis.length) {
+                document.getElementById('message').textContent = '오류: 충분한 고유 이모티콘이 없습니다!';
+                return;
+            }
+            // Select unique emojis for pairs
+            const selectedEmojis = shuffle(emojis.slice(0, neededEmojis));
+            // Create pairs by duplicating each selected emoji exactly once
+            const cardPairs = [];
+            selectedEmojis.forEach(emoji => {
+                cardPairs.push(emoji, emoji); // Add each emoji twice
+            });
+            const shuffledCards = shuffle(cardPairs);
+            const neededColors = totalPairs * 2;
+            const selectedColors = shuffle(generateColors(neededColors));
+
+            for (let i = 0; i < shuffledCards.length; i++) {
+                const card = document.createElement('div');
+                card.classList.add('card');
+                card.dataset.emoji = shuffledCards[i];
+
+                const cardInner = document.createElement('div');
+                cardInner.classList.add('card-inner');
+
+                const cardFront = document.createElement('div');
+                cardFront.classList.add('card-front');
+                cardFront.textContent = shuffledCards[i];
+                cardFront.style.backgroundColor = selectedColors[i];
+
+                const cardBack = document.createElement('div');
+                cardBack.classList.add('card-back');
+                cardBack.style.backgroundColor = selectedColors[i];
+
+                cardInner.appendChild(cardFront);
+                cardInner.appendChild(cardBack);
+                card.appendChild(cardInner);
+
+                card.addEventListener('click', flipCard);
+                gameBoard.appendChild(card);
+                cards.push(card);
+
+                if (currentMode === 'open') {
+                    card.classList.add('flipped');
+                }
+            }
+            startTimer();
+        }
+
+        function flipCard() {
+            if (!startTime) startTimer();
+            if (currentMode === 'open') {
+                if (!flippedCards.includes(this) && !this.classList.contains('matched')) {
+                    this.classList.add('selected');
+                    flippedCards.push(this);
+                    if (flippedCards.length === 2) {
+                        attemptCount++;
+                        updateStats();
+                        checkMatch();
+                    }
+                }
+            } else {
+                if (flippedCards.length < 2 && !flippedCards.includes(this) && !this.classList.contains('matched')) {
+                    this.classList.add('flipped', 'selected');
+                    flippedCards.push(this);
+
+                    if (flippedCards.length === 2) {
+                        attemptCount++;
+                        updateStats();
+                        setTimeout(checkMatch, 1000);
+                    }
+                }
+            }
+        }
+
+        function checkMatch() {
+            const [card1, card2] = flippedCards;
+            card1.classList.remove('selected');
+            card2.classList.remove('selected');
+
+            if (card1.dataset.emoji === card2.dataset.emoji) {
+                card1.classList.add('matched');
+                card2.classList.add('matched');
+                matchedPairs++;
+                if (matchedPairs === totalPairs) {
+                    stopTimer();
+                    document.getElementById('message').textContent = `축하합니다! 게임 성공! (시도 횟수: ${attemptCount}, 완료 시간: ${Math.floor((Date.now() - startTime) / 1000)}초)`;
+                }
+            } else {
+                if (currentMode === 'memory') {
+                    card1.classList.remove('flipped');
+                    card2.classList.remove('flipped');
+                }
+            }
+            flippedCards = [];
+        }
+
+        function startMemoryMode() {
+            currentMode = 'memory';
+            createBoard();
+        }
+
+        function startOpenMode() {
+            currentMode = 'open';
+            createBoard();
+        }
+
+        // 초기 2x2로 시작
+        document.getElementById('gridSize').value = '2';
+        updateGridSize();
+    </script>
+</body>
+</html>
